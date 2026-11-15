@@ -67,48 +67,42 @@ CREATE OR REPLACE PACKAGE BODY Products_Home_Package AS
 
     -- 3. Best-Selling Products
     PROCEDURE GetBestSellingProducts AS
-        P_CURSOR SYS_REFCURSOR;
-    BEGIN
-        OPEN P_CURSOR FOR
-            SELECT
-                P.PRODUCT_ID AS ProductId,
-                P.NAME AS Name,
-                P.PRICE AS Price,
-                P.PRODUCT_IMG_URL AS ProductImgUrl,
-                B.NAME AS BrandName,
-                C.NAME AS CategoryName
-            FROM PRODUCTS P
-            INNER JOIN BRANDS B
-                ON P.BRAND_ID = B.BRAND_ID
-            INNER JOIN CATEGORIES C
-                ON P.CATEGORY_ID = C.CATEGORY_ID
-            INNER JOIN (
-                SELECT
-                    OI.PRODUCT_ID,
-                    SUM(OI.QUANTITY) AS TOTAL_SOLD
-                FROM ORDER_ITEMS OI
-                INNER JOIN ORDERS O
-                    ON O.ORDER_ID = OI.ORDER_ID
-                WHERE O.ORDER_STATUS = 'DELIVERED'
-                GROUP BY OI.PRODUCT_ID
-                ORDER BY TOTAL_SOLD DESC
-                FETCH FIRST 10 ROWS ONLY
-            ) S
-                ON S.PRODUCT_ID = P.PRODUCT_ID
-            WHERE P.IS_DELETED = 'N'
-              AND P.STATUS = 'AVAILABLE'
-              AND B.IS_DELETED = 'N'
-              AND C.IS_DELETED = 'N'
-            ORDER BY S.TOTAL_SOLD DESC;
+    P_CURSOR SYS_REFCURSOR;
+BEGIN
+    OPEN P_CURSOR FOR
+        SELECT
+            P.PRODUCT_ID AS ProductId,
+            P.NAME AS Name,
+            P.PRICE AS Price,
+            P.PRODUCT_IMG_URL AS ProductImgUrl,
+            B.NAME AS BrandName,
+            C.NAME AS CategoryName
+        FROM PRODUCTS P
+        INNER JOIN BRANDS B
+            ON B.BRAND_ID = P.BRAND_ID
+        INNER JOIN CATEGORIES C
+            ON C.CATEGORY_ID = P.CATEGORY_ID
+        INNER JOIN ORDER_ITEMS OI
+            ON OI.PRODUCT_ID = P.PRODUCT_ID
+        INNER JOIN ORDERS O
+            ON O.ORDER_ID = OI.ORDER_ID
+        WHERE O.ORDER_STATUS = 'DELIVERED'
+          AND P.IS_DELETED = 'N'
+          AND P.STATUS = 'AVAILABLE'
+          AND B.IS_DELETED = 'N'
+          AND C.IS_DELETED = 'N'
+        GROUP BY
+            P.PRODUCT_ID,
+            P.NAME,
+            P.PRICE,
+            P.PRODUCT_IMG_URL,
+            B.NAME,
+            C.NAME
+        ORDER BY SUM(OI.QUANTITY) DESC, P.PRODUCT_ID
+        FETCH FIRST 10 ROWS ONLY;
 
-        DBMS_SQL.RETURN_RESULT(P_CURSOR);
-    END GetBestSellingProducts;
+    DBMS_SQL.RETURN_RESULT(P_CURSOR);
+END GetBestSellingProducts;
 
 END Products_Home_Package;
 /
-
-
-
-
-
-

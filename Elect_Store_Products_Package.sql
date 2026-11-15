@@ -40,11 +40,15 @@ CREATE OR REPLACE PACKAGE Products_Package AS
     P_PRICE                IN PRODUCTS.PRICE%TYPE,
     P_WARRANTY_INFORMATION IN PRODUCTS.WARRANTY_INFORMATION%TYPE,
     P_PRODUCT_IMG_URL      IN PRODUCTS.PRODUCT_IMG_URL%TYPE,
-    P_STOCK                IN PRODUCTS.STOCK%TYPE,
     P_IS_FEATURED          IN PRODUCTS.IS_FEATURED%TYPE,
     P_BRAND_ID             IN PRODUCTS.BRAND_ID%TYPE,
     P_CATEGORY_ID          IN PRODUCTS.CATEGORY_ID%TYPE,
     P_SPECIFICATIONS_JSON  IN CLOB
+);
+
+    PROCEDURE AdjustProductStock(
+    P_PRODUCT_ID IN PRODUCTS.PRODUCT_ID%TYPE,
+    P_DELTA      IN NUMBER
 );
 
 PROCEDURE DeleteProduct(
@@ -218,7 +222,8 @@ BEGIN
         INTO V_BRAND_ID
         FROM BRANDS
         WHERE BRAND_ID = P_BRAND_ID
-          AND IS_DELETED = 'N';
+          AND IS_DELETED = 'N'
+          FOR UPDATE;
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
@@ -235,7 +240,8 @@ BEGIN
         INTO V_CATEGORY_ID
         FROM CATEGORIES
         WHERE CATEGORY_ID = P_CATEGORY_ID
-          AND IS_DELETED = 'N';
+          AND IS_DELETED = 'N'
+          FOR UPDATE;
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
@@ -313,51 +319,40 @@ PROCEDURE UpdateProduct(
     P_PRICE                IN PRODUCTS.PRICE%TYPE,
     P_WARRANTY_INFORMATION IN PRODUCTS.WARRANTY_INFORMATION%TYPE,
     P_PRODUCT_IMG_URL      IN PRODUCTS.PRODUCT_IMG_URL%TYPE,
-    P_STOCK                IN PRODUCTS.STOCK%TYPE,
     P_IS_FEATURED          IN PRODUCTS.IS_FEATURED%TYPE,
     P_BRAND_ID             IN PRODUCTS.BRAND_ID%TYPE,
     P_CATEGORY_ID          IN PRODUCTS.CATEGORY_ID%TYPE,
     P_SPECIFICATIONS_JSON  IN CLOB
 )
 AS
-    V_BRAND_ID BRANDS.BRAND_ID%TYPE;
+    V_BRAND_ID    BRANDS.BRAND_ID%TYPE;
     V_CATEGORY_ID CATEGORIES.CATEGORY_ID%TYPE;
 BEGIN
     SAVEPOINT SP_UPDATE_PRODUCT;
 
-    -- Validate Brand
     BEGIN
         SELECT BRAND_ID
         INTO V_BRAND_ID
         FROM BRANDS
         WHERE BRAND_ID = P_BRAND_ID
-          AND IS_DELETED = 'N';
-
+          AND IS_DELETED = 'N'
+          FOR UPDATE;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            RAISE_APPLICATION_ERROR(
-                -20014,
-                'Brand not found or deleted.'
-            );
+            RAISE_APPLICATION_ERROR(-20014, 'Brand not found or deleted.');
     END;
 
-
-    -- Validate Category
     BEGIN
         SELECT CATEGORY_ID
         INTO V_CATEGORY_ID
         FROM CATEGORIES
         WHERE CATEGORY_ID = P_CATEGORY_ID
-          AND IS_DELETED = 'N';
-
+          AND IS_DELETED = 'N'
+          FOR UPDATE;
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
-            RAISE_APPLICATION_ERROR(
-                -20024,
-                'Category not found or deleted.'
-            );
+            RAISE_APPLICATION_ERROR(-20024, 'Category not found or deleted.');
     END;
-
 
     UPDATE PRODUCTS
     SET
@@ -366,40 +361,23 @@ BEGIN
         PRICE = P_PRICE,
         WARRANTY_INFORMATION = P_WARRANTY_INFORMATION,
         PRODUCT_IMG_URL = P_PRODUCT_IMG_URL,
-        STATUS = CASE
-            WHEN P_STOCK > 0 THEN 'AVAILABLE'
-            ELSE 'OUTOFSTOCK'
-        END,
-        STOCK = P_STOCK,
         IS_FEATURED = P_IS_FEATURED,
         BRAND_ID = P_BRAND_ID,
         CATEGORY_ID = P_CATEGORY_ID,
-        UPDATED_AT = SYSDATE
+        UPDATED_AT = CURRENT_TIMESTAMP
     WHERE PRODUCT_ID = P_PRODUCT_ID
       AND IS_DELETED = 'N';
 
     IF SQL%ROWCOUNT = 0 THEN
-        RAISE_APPLICATION_ERROR(
-            -20001,
-            'Product not found.'
-        );
+        RAISE_APPLICATION_ERROR(-20001, 'Product not found.');
     END IF;
-
 
     DELETE FROM PRODUCT_SPECIFICATIONS
     WHERE PRODUCT_ID = P_PRODUCT_ID;
 
-
     IF P_SPECIFICATIONS_JSON IS NOT NULL THEN
-        INSERT INTO PRODUCT_SPECIFICATIONS (
-            NAME,
-            VALUE,
-            PRODUCT_ID
-        )
-        SELECT
-            S.NAME,
-            S.VALUE,
-            P_PRODUCT_ID
+        INSERT INTO PRODUCT_SPECIFICATIONS (NAME, VALUE, PRODUCT_ID)
+        SELECT S.NAME, S.VALUE, P_PRODUCT_ID
         FROM JSON_TABLE(
             P_SPECIFICATIONS_JSON,
             '$[*]'
@@ -419,6 +397,51 @@ EXCEPTION
 END UpdateProduct;
 
 
+PROCEDURE AdjustProductStock(
+    P_PRODUCT_ID IN PRODUCTS.PRODUCT_ID%TYPE,
+    P_DELTA      IN NUMBER
+)
+AS
+    V_STOCK PRODUCTS.STOCK%TYPE;
+BEGIN
+    SAVEPOINT SP_ADJUST_STOCK;
+
+    IF P_DELTA IS NULL OR P_DELTA = 0 OR P_DELTA <> TRUNC(P_DELTA) THEN
+        RAISE_APPLICATION_ERROR(-20035, 'Invalid stock adjustment.');
+    END IF;
+
+    BEGIN
+        SELECT STOCK
+        INTO V_STOCK
+        FROM PRODUCTS
+        WHERE PRODUCT_ID = P_PRODUCT_ID
+          AND IS_DELETED = 'N'
+          FOR UPDATE;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20001, 'Product not found.');
+    END;
+
+    IF V_STOCK + P_DELTA < 0 THEN
+        RAISE_APPLICATION_ERROR(-20036, 'Stock cannot be negative.');
+    END IF;
+
+    UPDATE PRODUCTS
+    SET STOCK = STOCK + P_DELTA,
+        STATUS = CASE
+            WHEN STOCK + P_DELTA > 0 THEN 'AVAILABLE'
+            ELSE 'OUTOFSTOCK'
+        END,
+        UPDATED_AT = CURRENT_TIMESTAMP
+    WHERE PRODUCT_ID = P_PRODUCT_ID;
+
+    COMMIT;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK TO SP_ADJUST_STOCK;
+        RAISE;
+END AdjustProductStock;
 
 PROCEDURE DeleteProduct(
     P_PRODUCT_ID IN PRODUCTS.PRODUCT_ID%TYPE
@@ -428,7 +451,7 @@ BEGIN
     UPDATE PRODUCTS
     SET
         IS_DELETED = 'Y',
-        UPDATED_AT = SYSDATE
+        UPDATED_AT = CURRENT_TIMESTAMP
     WHERE PRODUCT_ID = P_PRODUCT_ID
       AND IS_DELETED = 'N';
 
@@ -441,4 +464,8 @@ END DeleteProduct;
      
 END Products_Package;
 /
+
+
+
+
 

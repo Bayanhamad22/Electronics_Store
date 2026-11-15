@@ -107,7 +107,8 @@ END CreateCategory;
             INTO V_CATEGORY_ID
             FROM CATEGORIES
             WHERE CATEGORY_ID = P_CATEGORY_ID
-              AND IS_DELETED = 'N';
+              AND IS_DELETED = 'N'
+              FOR UPDATE;
 
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
@@ -174,5 +175,3 @@ END CreateCategory;
 
 END Categories_Package;
 /
-
-

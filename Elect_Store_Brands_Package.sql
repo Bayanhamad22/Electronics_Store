@@ -107,7 +107,8 @@ CREATE OR REPLACE PACKAGE BODY Brands_Package AS
             INTO V_BRAND_ID
             FROM BRANDS
             WHERE BRAND_ID = P_BRAND_ID
-              AND IS_DELETED = 'N';
+              AND IS_DELETED = 'N'
+              FOR UPDATE;
 
         EXCEPTION
             WHEN NO_DATA_FOUND THEN
